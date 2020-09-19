@@ -18,6 +18,8 @@
 uint8_t TX_buffer[MAX_BUF_LENGTH] __attribute__((aligned(4)));
 uint8_t RX_buffer[MAX_BUF_LENGTH] __attribute__((aligned(4)));
 
+bool isReceiving = false;
+
 // init structs
 SX1280_Settings set = {
         .frequency = 2400000000,
@@ -35,12 +37,12 @@ SX1280_Settings set = {
         .RXoffset = 0x00,
         .ModParam = {FLRC_BR_1_300_BW_1_2, FLRC_CR_3_4, BT_0_5},
         .PacketParam = {PREAMBLE_LENGTH_24_BITS, FLRC_SYNC_WORD_LEN_P32S, RX_MATCH_SYNC_WORD_1, PACKET_FIXED_LENGTH, RECEIVEPKTLEN, CRC_2_BYTE, NO_WHITENING},
-        .DIOIRQ = {(TX_DONE|RX_DONE|RXTX_TIMEOUT), (TX_DONE|RX_DONE|RXTX_TIMEOUT), NONE, NONE}
+        .DIOIRQ = {(TX_DONE|RX_DONE|CRC_ERROR|RXTX_TIMEOUT), (TX_DONE|RX_DONE|RXTX_TIMEOUT), NONE, NONE}
 };
 SX1280_Packet_Status PacketStat;
 
-SX1280 * Wireless_Init(float channel, SPI_HandleTypeDef * WirelessSpi){
-	SX1280 * SX = &SX1280_struct;// pointer to the global struct
+SX1280 * Wireless_Init(float channel, SPI_HandleTypeDef * WirelessSpi, uint8_t mode){
+	SX1280 * SX = (mode==0) ? &SX1280_TX_struct : &SX1280_RX_struct;// pointer to the global struct
 
     SX->SPI_used = false;
 
@@ -49,12 +51,13 @@ SX1280 * Wireless_Init(float channel, SPI_HandleTypeDef * WirelessSpi){
 	SX->irqStatus = 0;      // last received IRQ status
 
     // set connections
+	// TO DO: FIND A MORE ELEGANT WAY OF DOING PIN ASSIGNMENT FOR TX/RX
     SX->SPI = WirelessSpi;
-    SX->CS_pin = SPI3_CS;
+    SX->CS_pin = (mode==0) ? SX_TX_CS : SX_RX_CS;
     set_pin(SX->CS_pin, HIGH);
-    SX->BUSY_pin = SX_BUSY;
-    SX->IRQ_pin = SX_IRQ;
-    SX->RST_pin = SX_RST;
+    SX->BUSY_pin = (mode==0) ? SX_TX_BUSY : SX_RX_BUSY;
+    SX->IRQ_pin = (mode==0) ? SX_TX_IRQ : SX_RX_IRQ;
+    SX->RST_pin = (mode==0) ? SX_TX_RST : SX_RX_RST;
 
     // set buffer locations
     SX->RXbuf = RX_buffer;
@@ -103,15 +106,28 @@ void Wireless_IRQ_Handler(SX1280* SX, uint8_t * data, uint8_t Nbytes){
 //	TextOut(msg);
     clearIRQ(SX,ALL);
 
+    if(irq & CRC_ERROR) {
+//    	TextOut("SX_IRQ CRC_ERROR\n\r");
+    	return;
+    }
+
     // process interrupts
     if(irq & TX_DONE){
 //    	TextOut("SX_IRQ TX_DONE\n\r");
     	isTransmitting = false;
-    	toggle_pin(LD_3);
+    	toggle_pin(LD_TX);
     }
 
     if(irq & RX_DONE){
 //    	TextOut("SX_IRQ RX_DONE\n\r");
+    	toggle_pin(LD_RX);
+    	// if signal is strong, then receive packet; otherwise wait for packets
+    	if (SX->Packet_status->RSSISync < 160) {
+    		ReceivePacket(SX);
+    	}else{
+    		// not necessary to force setRX() here when configured in Rx Continuous mode
+    		//setRX(SX, SX->SX_settings->periodBase, WIRELESS_RX_COUNT);
+    	}
     }
 
     if(irq & SYNCWORD_VALID) {
@@ -122,14 +138,10 @@ void Wireless_IRQ_Handler(SX1280* SX, uint8_t * data, uint8_t Nbytes){
 //    	TextOut("SX_IRQ SYNCWORD_ERROR\n\r");
     }
 
-    if(irq & CRC_ERROR) {
-//    	TextOut("SX_IRQ CRC_ERROR\n\r");
-    }
-
     if(irq & RXTX_TIMEOUT) {
     	// did not receive packet from robot
     	isTransmitting = false;
-//    	toggle_pin(LD_2);
+    	toggle_pin(LD_LED3);
 //    	TextOut("SX_IRQ RXTX_TIMEOUT\n\r");
     }
 
@@ -142,5 +154,8 @@ void Wireless_DMA_Handler(SX1280* SX, uint8_t* output){
 	DMA_Callback(SX);
     if(SX->expect_packet){ // expecting incoming packet in the buffer
     	SX->expect_packet = false;
+    	// reset RX if not in continuous RX mode!
+    	memcpy(Bot_to_PC, SX->RXbuf+3, RECEIVEPKTLEN);
+    	isReceiving = true;
     }
 }

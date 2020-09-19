@@ -296,7 +296,7 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
   */
 static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
 {
-	  /* USER CODE BEGIN 6 */
+  /* USER CODE BEGIN 6 */
 	  USBD_CDC_SetRxBuffer(&hUsbDeviceFS, &Buf[0]);
 	  USBD_CDC_ReceivePacket(&hUsbDeviceFS);
 
@@ -304,23 +304,25 @@ static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
 	  // store the latest data in usbData and usbLength
 
 	  // if the length is correct, store the data in the buffer
-	  if (* Len == 13) {
+	  if (* Len == 10) {
+		  // toggle USB led on basestation
+		  toggle_pin (LD_USB);
 		  // determine the robot id
-		  uint8_t usbDataRobotId = Buf[0] >> 3;
-
+		  uint8_t usbDataRobotId = Buf[0];
 		  // check if the usb data robot id is legal
-		  if (usbDataRobotId < 16 && !msgBuff[usbDataRobotId].isNew) {
+		  // id=16 is the rx basestation
+		  if (usbDataRobotId <= 16 && !msgBuff[usbDataRobotId].isNew) {
 			  // put the message in the buffer
-			  memcpy(msgBuff[usbDataRobotId].msg, Buf, 13);
+			  memcpy(msgBuff[usbDataRobotId].msg, Buf+2, 8);
 			  msgBuff[usbDataRobotId].isNew = true;
 			  return (USBD_OK);
 		  }
 	  }
 	  else {
-		  toggle_pin(LD_2);
+		  // received not 10 bytes, handle this if necessary
 	  }
 	  return (USBD_FAIL);
-	  /* USER CODE END 6 */
+  /* USER CODE END 6 */
 }
 
 /**
